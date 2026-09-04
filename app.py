@@ -83,7 +83,6 @@ if not st.session_state.authenticated:
                     st.error(f"Registration error: {str(e)}")
             else:
                 st.warning("All fields are required.")
-
 # ==========================================
 # 3. SCREEN 2: MAIN POOL INTERFACE
 # ==========================================
@@ -101,6 +100,7 @@ else:
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
         
+    # Generate the separate window tabs cleanly
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
@@ -150,8 +150,7 @@ else:
                 for game in games:
                     game_time = datetime.datetime.fromisoformat(game["game_time"].replace("Z", "+00:00"))
                     is_locked = current_time > game_time
-                    existing_pick = saved_picks.get(game["id"], None)
-
+                    
                     with st.container(border=True):
                         c1, c2, c3 = st.columns(3)
                         with c1:
@@ -169,7 +168,8 @@ else:
                             st.write(f"**{game['home_team']}**")
 
                         if is_locked:
-                            st.markdown(f"🔒 **Locked** | Your Choice: `{existing_pick if existing_pick else 'None'}`")
+                            existing_pick = saved_picks.get(game["id"], "No Selection")
+                            st.markdown(f"🔒 **Locked** | Your Choice: `{existing_pick}`")
                             if game["status"] == "FINAL":
                                 if game["winner"] == "TIE":
                                     st.warning("Game ended in a Tie!")
@@ -180,6 +180,7 @@ else:
                                     else:
                                         st.error(f"❌ Incorrect.")
                         else:
+                            existing_pick = saved_picks.get(game["id"], None)
                             options_list = ["Select Team", game["away_team"], game["home_team"]]
                             
                             default_idx = 0
@@ -190,4 +191,70 @@ else:
 
                             choice = st.radio(
                                 f"Select Winner for {game['id']}:",
+                                options=options_list,
+                                index=default_idx,
+                                key=f"sel_{game['id']}",
+                                horizontal=True,
+                                label_visibility="collapsed"
+                            )
+                            if choice != "Select Team" and choice != existing_pick:
+                                supabase.table("picks").upsert({
+                                    "user_id": st.session_state.user_id,
+                                    "matchup_id": game["id"],
+                                    "selected_team": choice,
+                                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                }).execute()
+                                st.toast(f"Saved: {choice}!", icon="💾")
 
+    # ------------------------------------------
+    # TAB 2: LIVE LEADERBOARD Scoreboard
+    # ------------------------------------------
+    with ui_tabs[1]:
+        st.header("🏆 Pool Standings")
+        try:
+            leaderboard_data = supabase.table("leaderboard").select("*").execute()
+            if leaderboard_data.data:
+                st.dataframe(leaderboard_data.data, hide_index=True, use_container_width=True)
+            else:
+                st.info("Leaderboard scores will compute once the first wave of games finish!")
+        except Exception:
+            st.caption("Waiting for match completions to rank player metrics.")
+
+    # ------------------------------------------
+    # TAB 3: ADMIN MANAGE PANEL
+    # ------------------------------------------
+    if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
+        with ui_tabs[2]:
+            st.header("⚙️ Admin Payment Audit Panel")
+            st.caption("Cross-reference your real Venmo feed. Toggle payment access manually to lock or unlock users instantly.")
+            
+            games_check = supabase.table("matchups").select("week_number").limit(1).execute()
+            adm_current_week = games_check.data[0]["week_number"] if games_check.data else 1
+            
+            st.write(f"Auditing Payment Status for: **Week {adm_current_week}**")
+            st.divider()
+
+            try:
+                users_res = supabase.table("profiles").select("id", "display_name").execute()
+                users_list = users_res.data if users_res.data else []
+                
+                payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_current_week).execute()
+                paid_map = {p["user_id"]: p["paid"] for p in payments_res.data} if payments_res.data else {}
+                
+                if not users_list:
+                    st.info("No players have registered accounts in your pool yet.")
+                else:
+                    for user in users_list:
+                        u_id = user["id"]
+                        u_name = user["display_name"]
+                        is_user_paid = paid_map.get(u_id, False)
+                        
+                        col_n, col_s = st.columns(2)
+                        with col_n:
+                            st.write(f"👤 **{u_name}**")
+                        with col_s:
+                            lbl = "✅ Paid (Click to Lock)" if is_user_paid else "❌ Unpaid (Click to Force Approve)"
+                            if st.button(lbl, key=f"adm_p_{u_id}"):
+                                supabase.table("weekly_payments").upsert({
+                                    "user_id": u_id,
+                                    "week_number": adm_current_week,
