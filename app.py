@@ -33,7 +33,7 @@ if "display_name" not in st.session_state:
 # 2. SCREEN 1: SECURE AUTHENTICATION
 # ==========================================
 if not st.session_state.authenticated:
-    st.title("🏈 NFL Pick'em Pool")
+    st.title("🏈 CDW & Cisco NFL Pick'em Pool")
     st.subheader("Sign In or Register")
     
     email = st.text_input("Email Address").strip().lower()
@@ -125,13 +125,14 @@ else:
             if not has_paid:
                 st.warning("⚠️ Weekly Entry Fee Required")
                 st.markdown(f"To unlock your entry sheet for **Week {current_week}**, there is a required **\$5.00 entry fee**.")
-                
-                venmo_note = f"Week {current_week} NFL Pick'em - {st.session_state.display_name}"
+
+                # 🎯 FIX: Explicitly enforce the "?" hook boundary to allow mobile devices to auto-route params
+                venmo_note = f"Week {current_week} NFL Pickem - {st.session_state.display_name}"
                 encoded_note = urllib.parse.quote(venmo_note)
-                venmo_url = f"https://venmo.com{VENMO_USERNAME}&amount=5.00&note={encoded_note}"
+                venmo_url = f"https://venmo.com/{VENMO_USERNAME}?txn=pay&amount=5.00&note={encoded_note}"
                 
                 st.markdown(f'<a href="{venmo_url}" target="_blank"><button style="background-color:#008CBA; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; width:100%;">💸 Pay $5.00 on Venmo</button></a>', unsafe_allow_html=True)
-                
+               
                 confirm_payment = st.checkbox("I verify I have sent my $5.00 buy-in via Venmo")
                 if confirm_payment:
                     if st.button("Unlock My Pick Sheet"):
