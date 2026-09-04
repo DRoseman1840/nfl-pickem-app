@@ -84,24 +84,54 @@ if not st.session_state.authenticated:
             else:
                 st.warning("All fields are required.")
 
-# ==========================================
-# 3. SCREEN 2: MAIN POOL INTERFACE
-# ==========================================
-else:
-    st.sidebar.title("🏈 Match Center")
-    st.sidebar.write(f"Logged in as: **{st.session_state.display_name}**")
-    st.sidebar.caption(f"Account: {st.session_state.user_email}")
-    
-    if st.sidebar.button("Log Out", use_container_width=True):
-        st.session_state.authenticated = False
-        st.session_state.user_id = ""
-        st.rerun()
+    # ------------------------------------------
+    # TAB 3: ADMIN MANAGE PANEL
+    # ------------------------------------------
+    if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
+        with ui_tabs[-1]:  # 🔧 FIX: Explicitly target the last tab slot safely
+            st.header("⚙️ Admin Payment Audit Panel")
+            st.caption("Cross-reference your real Venmo feed. Toggle payment access manually to lock or unlock users instantly.")
+            
+            # Safely query existing matchups to find the active week number
+            games_check = supabase.table("matchups").select("week_number").limit(1).execute()
+            adm_current_week = games_check.data[0]["week_number"] if games_check.data else 1
+            
+            st.write(f"Auditing Payment Status for: **Week {adm_current_week}**")
+            st.divider()
 
-    tabs_list = ["📝 Submit Weekly Picks", "🏆 Standings & Leaderboard"]
-    if st.session_state.user_email == ADMIN_EMAIL.strip().lower():
-        tabs_list.append("⚙️ Admin Panel")
-        
-    ui_tabs = st.tabs(tabs_list)
+            try:
+                # Fetch all registered user profiles
+                profiles_res = supabase.table("profiles").select("id", "display_name").execute()
+                users_list = profiles_res.data if profiles_res.data else []
+                
+                # Fetch payment logs for this week
+                payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_current_week).execute()
+                paid_map = {p["user_id"]: p["paid"] for p in payments_res.data} if payments_res.data else {}
+                
+                if not users_list:
+                    st.info("No players have registered accounts in your pool yet.")
+                else:
+                    for user in users_list:
+                        u_id = user["id"]
+                        u_name = user["display_name"]
+                        is_user_paid = paid_map.get(u_id, False)
+                        
+                        col_n, col_s = st.columns(2)
+                        with col_n:
+                            st.write(f"👤 **{u_name}**")
+                        with col_s:
+                            lbl = "✅ Paid (Click to Lock)" if is_user_paid else "❌ Unpaid (Click to Force Approve)"
+                            if st.button(lbl, key=f"adm_p_{u_id}"):
+                                supabase.table("weekly_payments").upsert({
+                                    "user_id": u_id,
+                                    "week_number": adm_current_week,
+                                    "paid": not is_user_paid
+                                }).execute()
+                                st.success(f"Updated status for {u_name}!")
+                                st.rerun()
+            except Exception as admin_err:
+                st.error(f"Admin Interface Error: {str(admin_err)}")
+
 
     # ------------------------------------------
     # TAB 1: USER PICK ENTRY FORM
