@@ -107,7 +107,6 @@ else:
         if not games:
             st.info("🏈 Awaiting matchups dataset loading. Please use your database SQL editor script tool to populate Week 1 matchups.")
         else:
-            # Safely group matching items inside the matrix cache view maps
             current_week = games[0]["week_number"] if games else 1
             st.header(f"NFL Week {current_week} Match Selections")
             
@@ -189,3 +188,4 @@ else:
                             )
                             if choice != existing_pick:
                                 supabase.table("picks").upsert({
+                                    "user_id": st.session_state.user_id,
