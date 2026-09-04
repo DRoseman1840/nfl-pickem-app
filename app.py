@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import urllib.parse
+import requests
 from supabase import create_client, Client
 
 # ==========================================
@@ -19,7 +20,7 @@ supabase = get_supabase_client()
 
 st.set_page_config(page_title="NFL Pick'em Pool", page_icon="🏈", layout="centered")
 
-# Initialize login states
+# Track authentication state
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user_email" not in st.session_state:
@@ -30,7 +31,74 @@ if "display_name" not in st.session_state:
     st.session_state.display_name = ""
 
 # ==========================================
-# 2. SCREEN 1: SECURE AUTHENTICATION
+# 🤖 EMBEDDED AUTOMATIC SYNC SYSTEM (No GitHub Needed!)
+# ==========================================
+def background_nfl_sync():
+    """Fetches real-time scores/games from ESPN and caches them inside Supabase"""
+    index_url = 'https://espn.com'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+    }
+    try:
+        res = requests.get(index_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            week_number = data.get('week', {}).get('number', 1)
+            events = data.get('events', [])
+            
+            for event in events:
+                try:
+                    game_id = event['id']
+                    competition = event['competitions'][0]
+                    game_time = competition['date']
+                    
+                    status_name = event['status']['type']['name']
+                    status = 'SCHEDULED'
+                    if 'STATUS_IN_PROGRESS' in status_name:
+                        status = 'LIVE'
+                    elif 'STATUS_FINAL' in status_name:
+                        status = 'FINAL'
+                        
+                    teams = competition['competitors']
+                    home_node = next(t for t in teams if t['homeAway'] == 'home')
+                    away_node = next(t for t in teams if t['homeAway'] == 'away')
+                    
+                    home_team = home_node['team']['abbreviation']
+                    home_logo = home_node['team'].get('logo', '')
+                    away_team = away_node['team']['abbreviation']
+                    away_logo = away_node['team'].get('logo', '')
+                    
+                    winner = None
+                    if status == 'FINAL':
+                        if home_node.get('winner') is True:
+                            winner = 'HOME'
+                        elif away_node.get('winner') is True:
+                            winner = 'AWAY'
+                        else:
+                            winner = 'TIE'
+
+                    matchup_data = {
+                        'id': game_id,
+                        'week_number': int(week_number),
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'home_logo': home_logo,
+                        'away_logo': away_logo,
+                        'game_time': game_time,
+                        'status': status,
+                        'winner': winner
+                    }
+                    supabase.table('matchups').upsert(matchup_data).execute()
+                except Exception:
+                    continue
+    except Exception:
+        pass # Silently proceed if ESPN fails to keep app smooth
+
+# Run background sync seamlessly on app refresh
+background_nfl_sync()
+
+# ==========================================
+# 3. SCREEN 1: SECURE AUTHENTICATION
 # ==========================================
 if not st.session_state.authenticated:
     st.title("🏈 NFL Pick'em Pool")
@@ -38,7 +106,6 @@ if not st.session_state.authenticated:
     
     email = st.text_input("Email Address").strip().lower()
     password = st.text_input("Password", type="password")
-    
     col1, col2 = st.columns(2)
     
     with col1:
@@ -48,20 +115,18 @@ if not st.session_state.authenticated:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     st.session_state.user_id = res.user.id
                     st.session_state.user_email = res.user.email
-                    
                     profile = supabase.table("profiles").select("display_name").eq("id", res.user.id).execute()
                     st.session_state.display_name = profile.data[0]["display_name"] if profile.data else email.split("@")[0]
-                    
                     st.session_state.authenticated = True
-                    st.success("Successfully logged in!")
+                    st.success("Logged in successfully!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Login failed: {str(e)}")
             else:
-                st.warning("Please fill out both email and password fields.")
+                st.warning("Please fill out both fields.")
 
     with col2:
-        st.info("💡 New player? Enter your email, password, and public display name below, then click register.")
+        st.info("💡 New player? Enter your details above and a display name below to sign up.")
         new_name = st.text_input("Display Name (Public)", key="reg_name")
         if st.button("Create Account", use_container_width=True):
             if email and password and new_name.strip():
@@ -69,14 +134,14 @@ if not st.session_state.authenticated:
                     res = supabase.auth.sign_up({"email": email, "password": password})
                     if res.user:
                         supabase.table("profiles").insert({"id": res.user.id, "display_name": new_name.strip()}).execute()
-                        st.success("Account created successfully! You can now log in above.")
+                        st.success("Account created successfully! You can now log in.")
                 except Exception as e:
                     st.error(f"Registration error: {str(e)}")
             else:
                 st.warning("All registration fields are required.")
 
 # ==========================================
-# 3. SCREEN 2: THE MAIN APPLICATION
+# 4. SCREEN 2: THE MAIN APPLICATION
 # ==========================================
 else:
     st.sidebar.title("🏈 Match Center")
@@ -88,7 +153,6 @@ else:
         st.session_state.user_id = ""
         st.rerun()
 
-    # Determine visible tabs based on whether the logged-in user is the Admin
     tabs_list = ["📝 Submit Weekly Picks", "🏆 Standings & Leaderboard"]
     if st.session_state.user_email == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Payment Panel")
@@ -103,13 +167,11 @@ else:
         games = response.data
 
         if not games:
-            st.info("The automation engine is currently gathering schedule updates. Check back shortly!")
+            st.info("Gathering live schedule updates. Please refresh the page in 5 seconds!")
         else:
-            # Dynamically pull the exact week number active in the database layout
             current_week = games[0]["week_number"] if games else 1
             st.header(f"NFL Week {current_week} Match Selections")
             
-            # Check payment registry database state
             pay_check = supabase.table("weekly_payments").select("paid").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
             has_paid = pay_check.data[0]["paid"] if pay_check.data else False
 
@@ -118,7 +180,6 @@ else:
                 st.warning("⚠️ Weekly Entry Fee Required")
                 st.markdown(f"To submit or edit your picks for **Week {current_week}**, there is a **\$5.00 buy-in**.")
                 
-                # Dynamic auto-updating Venmo Note configuration
                 venmo_note = f"Week {current_week} NFL Pick'em - {st.session_state.display_name}"
                 encoded_note = urllib.parse.quote(venmo_note)
                 venmo_url = f"https://venmo.com{VENMO_USERNAME}&amount=5.00&note={encoded_note}"
@@ -150,50 +211,3 @@ else:
             for game in games:
                 game_time = datetime.datetime.fromisoformat(game["game_time"].replace("Z", "+00:00"))
                 is_locked = current_time > game_time
-                
-                existing_pick = saved_picks.get(game["id"], None)
-                default_idx = 0
-                if existing_pick == game["home_team"]:
-                    default_idx = 1
-
-                with st.container(border=True):
-                    c1, c2, c3 = st.columns()
-                    with c1:
-                        if game["away_logo"]:
-                            st.image(game["away_logo"], width=40)
-                        st.write(f"**{game['away_team']}**")
-                    with c2:
-                        st.markdown("<p style='text-align:center; font-size:20px; font-weight:bold;'>@</p>", unsafe_allow_html=True)
-                    with c3:
-                        if game["home_logo"]:
-                            st.image(game["home_logo"], width=40)
-                        st.write(f"**{game['home_team']}**")
-
-                    if is_locked:
-                        st.markdown(f"🔒 **Locked** | Your Pick: `{existing_pick if existing_pick else 'No Selection'}`")
-                        if game["status"] == "FINAL":
-                            win_team = game["home_team"] if game["winner"] == "HOME" else game["away_team"]
-                            if game["winner"] == "TIE":
-                                st.warning("Game ended in a Tie!")
-                            elif existing_pick == win_team:
-                                st.success(f"✅ Correct! Winner: {win_team}")
-                            else:
-                                st.error(f"❌ Incorrect. Winner: {win_team}")
-                    else:
-                        choice = st.radio(
-                            f"Select Winner for {game['id']}:",
-                            options=[game["away_team"], game["home_team"]],
-                            index=default_idx,
-                            key=f"sel_{game['id']}",
-                            horizontal=True,
-                            label_visibility="collapsed",
-                            disabled=not has_paid
-                        )
-                        
-                        if has_paid and choice != existing_pick:
-                            pick_payload = {
-                                "user_id": st.session_state.user_id,
-                                "matchup_id": game["id"],
-                                "selected_team": choice,
-                                "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                            }
