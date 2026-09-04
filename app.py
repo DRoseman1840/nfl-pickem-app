@@ -40,7 +40,7 @@ if not st.session_state.authenticated:
     password = st.text_input("Password", type="password")
     col1, col2 = st.columns(2)
     
-        with col1:
+    with col1:
         if st.button("Log In", use_container_width=True):
             if email and password:
                 try:
