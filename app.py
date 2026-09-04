@@ -189,3 +189,4 @@ else:
                             if choice != existing_pick:
                                 supabase.table("picks").upsert({
                                     "user_id": st.session_state.user_id,
+                                }
