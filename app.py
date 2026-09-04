@@ -185,8 +185,13 @@ else:
                                 key=f"sel_{game['id']}",
                                 horizontal=True,
                                 label_visibility="collapsed"
-                            )
+                            )                                  
+
                             if choice != existing_pick:
                                 supabase.table("picks").upsert({
                                     "user_id": st.session_state.user_id,
-                                }
+                                      "matchup_id": game["id"],
+                                    "selected_team": choice,
+                                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                }).execute()  # 👈 Parenthesis is now closed correctly here!
+                                st.toast(f"Saved: {choice}!", icon="💾")
