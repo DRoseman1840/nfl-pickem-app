@@ -189,3 +189,15 @@ else:
                                 f"Select Winner for {game['id']}:",
                                 options=[game["away_team"], game["home_team"]],
                                 index=default_idx,
+                                key=f"sel_{game['id']}",
+                                horizontal=True,
+                                label_visibility="collapsed"
+                            )
+                            if choice != existing_pick:
+                                supabase.table("picks").upsert({
+                                    "user_id": st.session_state.user_id,
+                                    "matchup_id": game["id"],
+                                    "selected_team": choice,
+                                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                }).execute()  # 👈 Parenthesis ) closed right here!
+                                st.toast(f"Saved: {choice}!", icon="💾")
