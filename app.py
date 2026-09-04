@@ -100,7 +100,6 @@ else:
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
         
-    # Generate the separate window tabs cleanly
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
@@ -206,7 +205,8 @@ else:
                                 }).execute()
                                 st.toast(f"Saved: {choice}!", icon="💾")
 
-    # ------------------------------------------
+
+       # ------------------------------------------
     # TAB 2: LIVE LEADERBOARD Scoreboard
     # ------------------------------------------
     with ui_tabs[1]:
@@ -228,6 +228,7 @@ else:
             st.header("⚙️ Admin Payment Audit Panel")
             st.caption("Cross-reference your real Venmo feed. Toggle payment access manually to lock or unlock users instantly.")
             
+            # Safely query matchups to find current active week number context values
             games_check = supabase.table("matchups").select("week_number").limit(1).execute()
             adm_current_week = games_check.data[0]["week_number"] if games_check.data else 1
             
@@ -258,3 +259,10 @@ else:
                                 supabase.table("weekly_payments").upsert({
                                     "user_id": u_id,
                                     "week_number": adm_current_week,
+                                    "paid": not is_user_paid
+                                }).execute()
+                                st.success(f"Updated status for {u_name}!")
+                                st.rerun()
+            except Exception as admin_err:
+                st.error(f"Admin Interface Error: {str(admin_err)}")
+
