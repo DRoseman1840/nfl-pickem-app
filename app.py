@@ -40,15 +40,21 @@ if not st.session_state.authenticated:
     password = st.text_input("Password", type="password")
     col1, col2 = st.columns(2)
     
-    with col1:
+        with col1:
         if st.button("Log In", use_container_width=True):
             if email and password:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     st.session_state.user_id = res.user.id
                     st.session_state.user_email = res.user.email
+                    
+                    # 🔧 FIX: Safely pull row [0] out of the list wrapper
                     profile = supabase.table("profiles").select("display_name").eq("id", res.user.id).execute()
-                    st.session_state.display_name = profile.data["display_name"] if profile.data else email.split("@")
+                    if profile.data and len(profile.data) > 0:
+                        st.session_state.display_name = profile.data[0]["display_name"]
+                    else:
+                        st.session_state.display_name = email.split("@")[0]
+                        
                     st.session_state.authenticated = True
                     st.success("Logged in successfully!")
                     st.rerun()
@@ -109,9 +115,11 @@ else:
         else:
             current_week = games[0]["week_number"] if games else 1
             st.header(f"NFL Week {current_week} Match Selections")
-            
+
+
+                        # 🔧 FIX: Pull row [0] safely for the payment check
             pay_check = supabase.table("weekly_payments").select("paid").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
-            has_paid = pay_check.data[0]["paid"] if pay_check.data else False
+            has_paid = pay_check.data[0]["paid"] if (pay_check.data and len(pay_check.data) > 0) else False
 
             # --- VENMO LOCK GATEWAY ---
             if not has_paid:
