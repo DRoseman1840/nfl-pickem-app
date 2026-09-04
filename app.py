@@ -101,7 +101,6 @@ else:
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
         
-    # Unpack into dedicated variables
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
@@ -152,13 +151,8 @@ else:
                     game_time = datetime.datetime.fromisoformat(game["game_time"].replace("Z", "+00:00"))
                     is_locked = current_time > game_time
                     existing_pick = saved_picks.get(game["id"], None)
-                    
-                    default_idx = 0
-                    if existing_pick == game["home_team"]:
-                        default_idx = 1
 
                     with st.container(border=True):
-                        # 🔧 FIX: Enforce 3 columns inside parameter boundaries
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             if game.get("away_logo"): st.image(game["away_logo"], width=30)
@@ -185,21 +179,15 @@ else:
                                         st.success(f"✅ Correct!")
                                     else:
                                         st.error(f"❌ Incorrect.")
-                     
                         else:
+                            options_list = ["Select Team", game["away_team"], game["home_team"]]
+                            
+                            default_idx = 0
+                            if existing_pick == game["away_team"]:
+                                default_idx = 1
+                            elif existing_pick == game["home_team"]:
+                                default_idx = 2
+
                             choice = st.radio(
                                 f"Select Winner for {game['id']}:",
-                                options=[game["away_team"], game["home_team"]],
-                                index=default_idx,
-                                key=f"sel_{game['id']}",
-                                horizontal=True,
-                                label_visibility="collapsed"
-                            )
-                            if choice != existing_pick:
-                                supabase.table("picks").upsert({
-                                    "user_id": st.session_state.user_id,
-                                    "matchup_id": game["id"],
-                                    "selected_team": choice,
-                                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                                }).execute()  # 👈 Parenthesis ) closed right here!
-                                st.toast(f"Saved: {choice}!", icon="💾")
+
