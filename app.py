@@ -101,7 +101,7 @@ else:
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
         
-    # 🎯 FIX: Force-name this global layout variable to matches all tab content definitions below
+    # Unpack into dedicated variables
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
@@ -158,7 +158,8 @@ else:
                         default_idx = 1
 
                     with st.container(border=True):
-                        c1, c2, c3 = st.columns()
+                        # 🔧 FIX: Enforce 3 columns inside parameter boundaries
+                        c1, c2, c3 = st.columns(3)
                         with c1:
                             if game.get("away_logo"): st.image(game["away_logo"], width=30)
                             st.write(f"**{game['away_team']}**")
@@ -184,6 +185,7 @@ else:
                                         st.success(f"✅ Correct!")
                                     else:
                                         st.error(f"❌ Incorrect.")
+                     
                         else:
                             choice = st.radio(
                                 f"Select Winner for {game['id']}:",
