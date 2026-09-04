@@ -30,90 +30,7 @@ if "display_name" not in st.session_state:
     st.session_state.display_name = ""
 
 # ==========================================
-# 🤖 AUTOMATED DATA SYNCHRONIZER & FALLBACK
-# ==========================================
-def automated_nflverse_sync():
-    """Fetches real-time schedules and game results cleanly from nflverse data feeds"""
-    url = "https://api.bigballsdata.com/v1/nfl/games"
-    try:
-        res = requests.get(url, timeout=5)
-        if res.status_code == 200:
-            raw_data = res.json()
-            
-            # Extract games cleanly whether returned as dict or list payload wrapper
-            if isinstance(raw_data, dict):
-                games_list = raw_data.get("games", []) if "games" in raw_data else list(raw_data.values())
-            else:
-                games_list = raw_data
-
-            for game in games_list:
-                if not isinstance(game, dict) or game.get("season_type") != "REG":
-                    continue
-                    
-                game_id = str(game.get("game_id"))
-                week_number = int(game.get("week", 1))
-                home_team = game.get("home_team", "UNKNOWN").upper()
-                away_team = game.get("away_team", "UNKNOWN").upper()
-                
-                # Setup kickoff structure timestamp safely
-                gameday = game.get("gameday", datetime.date.today().isoformat())
-                gametime = game.get("gametime", "13:00")
-                game_time = f"{gameday}T{gametime}:00Z"
-                
-                raw_status = game.get("status", "POST")
-                status = "SCHEDULED"
-                winner = None
-                
-                if raw_status == "FINAL" or game.get("home_score") is not None:
-                    status = "FINAL"
-                    h_score = int(game.get("home_score", 0))
-                    a_score = int(game.get("away_score", 0))
-                    if h_score > a_score:
-                        winner = "HOME"
-                    elif a_score > h_score:
-                        winner = "AWAY"
-                    else:
-                        winner = "TIE"
-                elif raw_status == "INGAME":
-                    status = "LIVE"
-
-                matchup_payload = {
-                    'id': game_id,
-                    'week_number': week_number,
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'home_logo': f"https://espncdn.com{home_team.lower()}.png",
-                    'away_logo': f"https://espncdn.com{away_team.lower()}.png",
-                    'game_time': game_time,
-                    'status': status,
-                    'winner': winner
-                }
-                supabase.table('matchups').upsert(matchup_payload).execute()
-            return
-    except Exception:
-        pass # API down or format shift? Drop to fallback setup below smoothly
-
-    # 🛡️ FAILSAFE RESCUE BACKUP: If API fails, auto-generate standard week matrix structure data
-    try:
-        check_games = supabase.table("matchups").select("id", count="exact").execute()
-        if not check_games.count:
-            # Fallback mock template to allow registration and app flow logic to function
-            sample_date = (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
-            fallback_payload = {
-                'id': "2026_01_BAL_KC", 'week_number': 1, 'home_team': "KC", 'away_team': "BAL",
-                'home_logo': "https://espncdn.comkc.png",
-                'away_logo': "https://espncdn.combal.png",
-                'game_time': f"{sample_date}T20:20:00Z", 'status': "SCHEDULED", 'winner': None
-            }
-            supabase.table('matchups').upsert(fallback_payload).execute()
-    except Exception:
-        pass
-
-# Fire connection sync natively whenever a user enters the portal
-automated_nflverse_sync()
-
-# ==========================================
-# 3. SCREEN 1: SECURE AUTHENTICATION
+# 2. SCREEN 1: SECURE AUTHENTICATION
 # ==========================================
 if not st.session_state.authenticated:
     st.title("🏈 NFL Pick'em Pool")
@@ -162,7 +79,7 @@ if not st.session_state.authenticated:
                 st.warning("All fields are required.")
 
 # ==========================================
-# 4. SCREEN 2: MAIN POOL INTERFACE
+# 3. SCREEN 2: MAIN POOL INTERFACE
 # ==========================================
 else:
     st.sidebar.title("🏈 Match Center")
@@ -178,7 +95,6 @@ else:
     if st.session_state.user_email == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
         
-    # FIX: Correctly unpack variable names to prevent iteration type confusion mismatches
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
@@ -189,16 +105,10 @@ else:
         games = response.data
 
         if not games:
-            st.info("🏈 Connecting to live NFL schedule data pipeline. Please refresh the page in 5 seconds...")
+            st.info("🏈 Awaiting matchups population. Use the admin panel or data sync utility to upload this week's slate.")
         else:
-            # Dynamically lock active weekly frame views based on timestamps
-            today_str = datetime.date.today().isoformat()
-            current_week = games[0]["week_number"]
-            for g in games:
-                if g["game_time"] >= today_str:
-                    current_week = g["week_number"]
-                    break
-                    
+            # Detect active weekly layout context frames cleanly
+            current_week = games[0]["week_number"] if games else 1
             st.header(f"NFL Week {current_week} Match Selections")
             
             pay_check = supabase.table("weekly_payments").select("paid").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
@@ -213,3 +123,70 @@ else:
                 encoded_note = urllib.parse.quote(venmo_note)
                 venmo_url = f"https://venmo.com{VENMO_USERNAME}&amount=5.00&note={encoded_note}"
                 
+                st.markdown(f'<a href="{venmo_url}" target="_blank"><button style="background-color:#008CBA; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; width:100%;">💸 Pay $5.00 on Venmo</button></a>', unsafe_allow_html=True)
+                
+                confirm_payment = st.checkbox("I verify I have sent my $5.00 buy-in via Venmo")
+                if confirm_payment:
+                    if st.button("Unlock My Pick Sheet"):
+                        supabase.table("weekly_payments").upsert({"user_id": st.session_state.user_id, "week_number": current_week, "paid": True}).execute()
+                        st.success("Form Unlocked!")
+                        st.rerun()
+                st.divider()
+                st.info("🔒 Matchup selections are hidden until payment verification is completed above.")
+
+            # --- RENDER MATCHUPS ---
+            if has_paid:
+                st.caption("Picks lock individually exactly at each game's kickoff time.")
+                user_picks_res = supabase.table("picks").select("matchup_id", "selected_team").eq("user_id", st.session_state.user_id).execute()
+                saved_picks = {p["matchup_id"]: p["selected_team"] for p in user_picks_res.data}
+
+                current_time = datetime.datetime.now(datetime.timezone.utc)
+                active_week_games = [g for g in games if g["week_number"] == current_week]
+                
+                for game in active_week_games:
+                    game_time = datetime.datetime.fromisoformat(game["game_time"].replace("Z", "+00:00"))
+                    is_locked = current_time > game_time
+                    existing_pick = saved_picks.get(game["id"], None)
+                    
+                    default_idx = 0
+                    if existing_pick == game["home_team"]:
+                        default_idx = 1
+
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns()
+                        with c1:
+                            if game.get("away_logo"): st.image(game["away_logo"], width=30)
+                            st.write(f"**{game['away_team']}**")
+                        with c2:
+                            st.markdown("<p style='text-align:center;font-weight:bold;margin-top:10px;'>@</p>", unsafe_allow_html=True)
+                        with c3:
+                            if game.get("home_logo"): st.image(game["home_logo"], width=30)
+                            st.write(f"**{game['home_team']}**")
+
+                        if is_locked:
+                            st.markdown(f"🔒 **Locked** | Your Choice: `{existing_pick if existing_pick else 'None'}`")
+                            if game["status"] == "FINAL":
+                                if game["winner"] == "TIE":
+                                    st.warning("Game ended in a Tie!")
+                                else:
+                                    win_team = game["home_team"] if game["winner"] == "HOME" else game["away_team"]
+                                    if existing_pick == win_team:
+                                        st.success(f"✅ Correct! Winner: {win_team}")
+                                    else:
+                                        st.error(f"❌ Incorrect. Winner: {win_team}")
+                        else:
+                            choice = st.radio(
+                                f"Select Winner for {game['id']}:",
+                                options=[game["away_team"], game["home_team"]],
+                                index=default_idx,
+                                key=f"sel_{game['id']}",
+                                horizontal=True,
+                                label_visibility="collapsed"
+                            )
+                            if choice != existing_pick:
+                                supabase.table("picks").upsert({
+                                    "user_id": st.session_state.user_id,
+                                    "matchup_id": game["id"],
+                                    "selected_team": choice,
+                                    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                                }).execute()
