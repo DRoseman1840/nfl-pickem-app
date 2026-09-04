@@ -34,18 +34,22 @@ if "display_name" not in st.session_state:
 # ==========================================
 def automated_nflverse_sync():
     """Fetches real-time schedules and game results cleanly from nflverse open CDN"""
-    # Canonical nflverse live tracking endpoint for the active season
     url = "https://bigballsdata.com"
     
     try:
         res = requests.get(url, timeout=10)
         if res.status_code == 200:
-            games_list = res.json()
+            raw_data = res.json()
             
-            # Filter down to regular season matches for the active calendar cycle
-            # nflverse structures games individually with clear labels
+            # 🔧 FIX: Handle dictionary structures if the CDN wraps the payload
+            if isinstance(raw_data, dict):
+                games_list = raw_data.get("games", []) if "games" in raw_data else list(raw_data.values())
+            else:
+                games_list = raw_data
+
+            # Loop through regular season matches safely
             for game in games_list:
-                if game.get("season_type") != "REG":
+                if not isinstance(game, dict) or game.get("season_type") != "REG":
                     continue
                     
                 game_id = str(game.get("game_id"))
@@ -54,10 +58,8 @@ def automated_nflverse_sync():
                 away_team = game.get("away_team")
                 
                 # Format standard kick dates 
-                # e.g., '2026-09-10T20:20:00Z'
                 game_time = game.get("gameday") + "T" + game.get("gametime") + ":00Z"
                 
-                # Map nflverse status formats into your app mechanics
                 raw_status = game.get("status", "POST")
                 status = "SCHEDULED"
                 winner = None
@@ -90,9 +92,9 @@ def automated_nflverse_sync():
                 # Keep database updated in the background
                 supabase.table('matchups').upsert(matchup_payload).execute()
     except Exception:
-        pass # Gracefully skip processing errors to keep frontend loading snappy
+        pass # Gracefully skip processing exceptions to keep interface functional
 
-# Fire automated background sync natively whenever a user accesses the portal
+# Fire background sync natively whenever a user touches the web portal
 automated_nflverse_sync()
 
 # ==========================================
@@ -114,7 +116,7 @@ if not st.session_state.authenticated:
                     st.session_state.user_id = res.user.id
                     st.session_state.user_email = res.user.email
                     profile = supabase.table("profiles").select("display_name").eq("id", res.user.id).execute()
-                    st.session_state.display_name = profile.data["display_name"] if profile.data else email.split("@")
+                    st.session_state.display_name = profile.data[0]["display_name"] if profile.data else email.split("@")[0]
                     st.session_state.authenticated = True
                     st.success("Logged in successfully!")
                     st.rerun()
@@ -174,8 +176,14 @@ else:
         if not games:
             st.info("🏈 Connecting to live NFL schedule data pipeline. Please refresh the page in 5 seconds...")
         else:
-            # Display whichever week is returned by the data pipeline
-            current_week = games[0]["week_number"] if games else 1
+            # 🔧 FIX: Find the current active week by looking at today's calendar context
+            today_str = datetime.date.today().isoformat()
+            current_week = games[0]["week_number"]
+            for g in games:
+                if g["game_time"] >= today_str:
+                    current_week = g["week_number"]
+                    break
+                    
             st.header(f"NFL Week {current_week} Match Selections")
             
             pay_check = supabase.table("weekly_payments").select("paid").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
@@ -204,7 +212,4 @@ else:
             # --- RENDER MATCHUPS ---
             if has_paid:
                 st.caption("Picks lock individually exactly at each game's kickoff time.")
-                user_picks_res = supabase.table("picks").select("matchup_id", "selected_team").eq("user_id", st.session_state.user_id).execute()
-                saved_picks = {p["matchup_id"]: p["selected_team"] for p in user_picks_res.data}
 
-                current_time = datetime.datetime.now(datetime.timezone.utc)
