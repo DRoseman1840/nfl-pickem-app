@@ -174,7 +174,7 @@ else:
                 confirm_payment = st.checkbox("I verify I have sent my $5.00 buy-in via Venmo")
                 if confirm_payment:
                     if st.button("Unlock My Pick Sheet"):
-                        supabase.table("weekly_payments").upsert({"user_id": st.session_state.user_id, "week_number": current_week, "paid": True}).execute()
+                        supabase.table("weekly_payments").upsert({"user_id": st.session_state.user_id, "week_number": current_week, "paid": True}, on_conflict="user_id,week_number").execute()
                         st.success("Form Unlocked!")
                         st.rerun()
                 st.divider()
@@ -247,7 +247,7 @@ else:
                                     "matchup_id": game["id"],
                                     "selected_team": choice,
                                     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
-                                }).execute()
+                                }, on_conflict="user_id,matchup_id").execute()
                                 st.toast(f"Saved: {choice}!", icon="💾")
 
     # ------------------------------------------
@@ -352,7 +352,7 @@ else:
                                     "user_id": u_id,
                                     "week_number": adm_current_week,
                                     "paid": not is_user_paid
-                                }).execute()
+                                }, on_conflict="user_id,week_number").execute()
                                 st.success(f"Updated status for {u_name}!")
                                 st.rerun()
             except Exception as admin_err:
