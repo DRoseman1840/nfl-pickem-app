@@ -8,22 +8,29 @@ from supabase import create_client, Client
 # ==========================================
 # 1. GLOBAL APP CONFIGURATION
 # ==========================================
-# Credentials now come from Streamlit secrets instead of being hardcoded.
-# Locally: create .streamlit/secrets.toml (already gitignored by default) with:
+# Secrets: set these in .streamlit/secrets.toml locally, or under
+# App settings > Secrets on Streamlit Community Cloud.
 #   SUPABASE_URL = "https://txgwpaaaecbxivzuosmr.supabase.co"
-#   SUPABASE_KEY = "your-anon-key"
-#   ADMIN_EMAIL = "drose1840@gmail.com"
-# On Streamlit Community Cloud: set the same keys under App settings > Secrets.
+#   SUPABASE_KEY = "your-publishable/anon-key"
+#   ADMIN_EMAIL  = "drose1840@gmail.com"
+#   APP_URL      = "https://your-app-name.streamlit.app"   <- needed for password reset links
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 VENMO_USERNAME = "Derek-Roseman"  # Do NOT include the "@" symbol here
 ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", "drose1840@gmail.com")
+APP_URL = st.secrets.get("APP_URL", "")
+ENTRY_FEE = 5.00
 
-@st.cache_resource
-def get_supabase_client() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
-supabase = get_supabase_client()
+# IMPORTANT: the Supabase client is stored in st.session_state rather than
+# cached with @st.cache_resource. Streamlit's cache_resource is shared across
+# EVERY visitor to the app (it's a per-process cache, not per-user), which
+# would mean one user's login session could bleed into another user's
+# requests once we started doing things like changing email/password.
+# st.session_state is isolated per browser session, so this keeps each
+# person's authenticated client private to them.
+if "supabase" not in st.session_state:
+    st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase: Client = st.session_state.supabase
 
 st.set_page_config(page_title="NFL Pick'em Pool", page_icon="🏈", layout="centered")
 
@@ -39,8 +46,7 @@ if "display_name" not in st.session_state:
 
 def get_current_week() -> int:
     """The current week is the earliest week that still has a non-FINAL game.
-    Once every game in a week is FINAL, we roll forward to the next week.
-    Falls back to the highest known week number if everything is finished."""
+    Once every game in a week is FINAL, we roll forward to the next week."""
     upcoming = (
         supabase.table("matchups")
         .select("week_number")
@@ -62,19 +68,64 @@ def get_current_week() -> int:
     return latest.data[0]["week_number"] if latest.data else 1
 
 
+def medals_display(gold: int, silver: int, bronze: int) -> str:
+    """Only show medal categories the player has actually earned."""
+    parts = []
+    if gold:
+        parts.append(f"🥇({gold})")
+    if silver:
+        parts.append(f"🥈({silver})")
+    if bronze:
+        parts.append(f"🥉({bronze})")
+    return " ".join(parts)
+
+
 # ==========================================
-# 2. SCREEN 1: SECURE AUTHENTICATION
+# 2. PASSWORD RESET LANDING (from the emailed link)
+# ==========================================
+query_params = st.query_params
+if "code" in query_params and not st.session_state.authenticated:
+    st.title("🔑 Reset Your Password")
+    code = query_params["code"]
+
+    if "recovery_session_set" not in st.session_state:
+        try:
+            supabase.auth.exchange_code_for_session({"auth_code": code})
+            st.session_state.recovery_session_set = True
+        except Exception as e:
+            st.error(
+                "This reset link is invalid or has expired. Please request a new one from the "
+                f"'Forgot Password' tab on the login page. ({e})"
+            )
+
+    if st.session_state.get("recovery_session_set"):
+        new_pw = st.text_input("New Password", type="password", key="recovery_new_pw")
+        confirm_pw = st.text_input("Confirm New Password", type="password", key="recovery_confirm_pw")
+        if st.button("Update Password", type="primary"):
+            if new_pw and new_pw == confirm_pw:
+                try:
+                    supabase.auth.update_user({"password": new_pw})
+                    st.success("Password updated! You can now log in with your new password.")
+                    st.query_params.clear()
+                except Exception as e:
+                    st.error(f"Couldn't update password: {str(e)}")
+            else:
+                st.warning("Passwords must match and can't be empty.")
+    st.stop()
+
+# ==========================================
+# 3. SCREEN 1: SECURE AUTHENTICATION
 # ==========================================
 if not st.session_state.authenticated:
     st.title("🏈 NFL Pick'em Pool")
-    st.subheader("Sign In or Register")
+    st.caption("Submit weekly picks, track the leaderboard, and settle bragging rights with the group.")
 
-    email = st.text_input("Email Address").strip().lower()
-    password = st.text_input("Password", type="password")
-    col1, col2 = st.columns(2)
+    login_tab, signup_tab, forgot_tab = st.tabs(["🔑 Log In", "📝 Create Account", "❓ Forgot Password"])
 
-    with col1:
-        if st.button("Log In", use_container_width=True):
+    with login_tab:
+        email = st.text_input("Email Address", key="login_email").strip().lower()
+        password = st.text_input("Password", type="password", key="login_password")
+        if st.button("Log In", use_container_width=True, type="primary"):
             if email and password:
                 try:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
@@ -98,15 +149,21 @@ if not st.session_state.authenticated:
             else:
                 st.warning("Please fill out both fields.")
 
-    with col2:
-        st.info("💡 New player? Enter your details above and a display name below to sign up.")
-        new_name = st.text_input("Display Name (Public)", key="reg_name")
-        if st.button("Create Account", use_container_width=True):
-            if email and password and new_name.strip():
+    with signup_tab:
+        st.info("💡 Enter your email, choose a password, and pick the display name your league will see.")
+        new_email = st.text_input("Email Address", key="signup_email").strip().lower()
+        new_password = st.text_input("Password", type="password", key="signup_password")
+        new_name = st.text_input("Display Name (Public)", key="signup_name")
+        if st.button("Create Account", use_container_width=True, type="primary"):
+            if new_email and new_password and new_name.strip():
                 try:
-                    res = supabase.auth.sign_up({"email": email, "password": password})
+                    res = supabase.auth.sign_up({"email": new_email, "password": new_password})
                     if res.user:
-                        supabase.table("profiles").insert({"id": res.user.id, "display_name": new_name.strip()}).execute()
+                        supabase.table("profiles").insert({
+                            "id": res.user.id,
+                            "display_name": new_name.strip(),
+                            "email": new_email,
+                        }).execute()
                         st.markdown("---")
                         st.success("🎉 Account Created Successfully!")
                         st.info("📧 **Action Required:** Open your email inbox and click the confirmation link before attempting to log in.")
@@ -116,13 +173,63 @@ if not st.session_state.authenticated:
             else:
                 st.warning("All fields are required.")
 
+    with forgot_tab:
+        st.info("Enter the email on your account and we'll send you a link to reset your password.")
+        reset_email = st.text_input("Email Address", key="reset_email").strip().lower()
+        if st.button("Send Reset Link", use_container_width=True):
+            if reset_email:
+                try:
+                    supabase.auth.reset_password_for_email(reset_email, {"redirect_to": APP_URL})
+                    st.success("If that email is registered, a reset link is on its way — check your inbox.")
+                except Exception as e:
+                    st.error(f"Couldn't send reset email: {str(e)}")
+            else:
+                st.warning("Enter your email first.")
+
 # ==========================================
-# 3. SCREEN 2: MAIN POOL INTERFACE
+# 4. SCREEN 2: MAIN POOL INTERFACE
 # ==========================================
 else:
-    st.sidebar.title("🏈 Match Center")
+    st.sidebar.title("👤 Account Profile")
     st.sidebar.write(f"Logged in as: **{st.session_state.display_name}**")
     st.sidebar.caption(f"Account: {st.session_state.user_email}")
+
+    with st.sidebar.expander("⚙️ Account Settings"):
+        st.markdown("**Display Name**")
+        new_dn = st.text_input("Display Name", value=st.session_state.display_name, key="settings_display_name", label_visibility="collapsed")
+        if st.button("Update Display Name", key="update_dn_btn", use_container_width=True):
+            if new_dn.strip():
+                try:
+                    supabase.table("profiles").update({"display_name": new_dn.strip()}).eq("id", st.session_state.user_id).execute()
+                    st.session_state.display_name = new_dn.strip()
+                    st.success("Display name updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Couldn't update: {str(e)}")
+
+        st.markdown("---")
+        st.markdown("**Email Address**")
+        new_email_setting = st.text_input("Email", value=st.session_state.user_email, key="settings_email", label_visibility="collapsed")
+        if st.button("Update Email", key="update_email_btn", use_container_width=True):
+            try:
+                supabase.auth.update_user({"email": new_email_setting.strip().lower()})
+                st.success("Confirmation link sent to your new email — click it to finish the change.")
+            except Exception as e:
+                st.error(f"Couldn't update: {str(e)}")
+
+        st.markdown("---")
+        st.markdown("**Password**")
+        new_pw_setting = st.text_input("New Password", type="password", key="settings_new_pw", placeholder="New password")
+        confirm_pw_setting = st.text_input("Confirm Password", type="password", key="settings_confirm_pw", placeholder="Confirm new password")
+        if st.button("Update Password", key="update_pw_btn", use_container_width=True):
+            if new_pw_setting and new_pw_setting == confirm_pw_setting:
+                try:
+                    supabase.auth.update_user({"password": new_pw_setting})
+                    st.success("Password updated!")
+                except Exception as e:
+                    st.error(f"Couldn't update: {str(e)}")
+            else:
+                st.warning("Passwords must match and can't be empty.")
 
     if st.sidebar.button("Log Out", use_container_width=True):
         st.session_state.authenticated = False
@@ -163,16 +270,15 @@ else:
             # --- VENMO LOCK GATEWAY ---
             if not has_paid:
                 st.warning("⚠️ Weekly Entry Fee Required")
-                st.markdown(f"To unlock your entry sheet for **Week {current_week}**, there is a required **\$5.00 entry fee**.")
+                st.markdown(f"To unlock your entry sheet for **Week {current_week}**, there is a required **${ENTRY_FEE:.2f} entry fee**.")
 
                 venmo_note = f"Week {current_week} NFL Pickem - {st.session_state.display_name}"
                 encoded_note = urllib.parse.quote(venmo_note)
-                # Fixed missing "/" between the domain and username (this was broken before).
-                venmo_url = f"https://venmo.com/{VENMO_USERNAME}?txn=pay&amount=5.00&note={encoded_note}"
+                venmo_url = f"https://venmo.com/{VENMO_USERNAME}?txn=pay&amount={ENTRY_FEE:.2f}&note={encoded_note}"
 
-                st.markdown(f'<a href="{venmo_url}" target="_blank"><button style="background-color:#008CBA; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; width:100%;">💸 Pay $5.00 on Venmo</button></a>', unsafe_allow_html=True)
+                st.markdown(f'<a href="{venmo_url}" target="_blank"><button style="background-color:#008CBA; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; width:100%;">💸 Pay ${ENTRY_FEE:.2f} on Venmo</button></a>', unsafe_allow_html=True)
 
-                confirm_payment = st.checkbox("I verify I have sent my $5.00 buy-in via Venmo")
+                confirm_payment = st.checkbox(f"I verify I have sent my ${ENTRY_FEE:.2f} buy-in via Venmo")
                 if confirm_payment:
                     if st.button("Unlock My Pick Sheet"):
                         supabase.table("weekly_payments").upsert({"user_id": st.session_state.user_id, "week_number": current_week, "paid": True}, on_conflict="user_id,week_number").execute()
@@ -186,6 +292,19 @@ else:
                 st.caption("Picks lock individually exactly at each game's kickoff time.")
                 user_picks_res = supabase.table("picks").select("matchup_id", "selected_team").eq("user_id", st.session_state.user_id).execute()
                 saved_picks = {p["matchup_id"]: p["selected_team"] for p in user_picks_res.data}
+
+                # Pull everyone's picks + names once, so locked games can reveal
+                # what others chose without exposing anything before kickoff.
+                week_matchup_ids = [g["id"] for g in games]
+                all_week_picks = (
+                    supabase.table("picks").select("user_id, matchup_id, selected_team").in_("matchup_id", week_matchup_ids).execute().data
+                    if week_matchup_ids else []
+                )
+                all_profiles_rows = supabase.table("profiles").select("id, display_name").execute().data or []
+                name_by_id = {p["id"]: p["display_name"] for p in all_profiles_rows}
+                picks_by_matchup = {}
+                for pk in all_week_picks:
+                    picks_by_matchup.setdefault(pk["matchup_id"], []).append(pk)
 
                 current_time = datetime.datetime.now(datetime.timezone.utc)
 
@@ -224,6 +343,14 @@ else:
                                         st.success(f"✅ Correct!")
                                     else:
                                         st.error(f"❌ Incorrect.")
+
+                            # Reveal everyone else's pick now that it's locked and can't influence anyone.
+                            others = [p for p in picks_by_matchup.get(game["id"], []) if p["user_id"] != st.session_state.user_id]
+                            if others:
+                                with st.expander("👀 See everyone else's picks for this game"):
+                                    for p in others:
+                                        nm = name_by_id.get(p["user_id"], "Unknown Player")
+                                        st.write(f"- **{nm}**: {p['selected_team']}")
                         else:
                             existing_pick = saved_picks.get(game["id"], None)
                             options_list = ["Select Team", game["away_team"], game["home_team"]]
@@ -251,6 +378,40 @@ else:
                                 }, on_conflict="user_id,matchup_id").execute()
                                 st.toast(f"Saved: {choice}!", icon="💾")
 
+                # --- WEEKLY TIEBREAKER ---
+                st.divider()
+                st.subheader("🎯 Weekly Tiebreaker")
+                last_game = max(games, key=lambda g: g["game_time"])
+                last_game_time = datetime.datetime.fromisoformat(last_game["game_time"].replace("Z", "+00:00"))
+                tb_locked = current_time > last_game_time
+
+                st.caption(
+                    f"Predict the **combined final score** (both teams added together) of the last game of the "
+                    f"week: {last_game['away_team']} @ {last_game['home_team']}. Used to break ties for the weekly win."
+                )
+
+                existing_tb_res = supabase.table("tiebreakers").select("predicted_total").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
+                existing_tb_val = existing_tb_res.data[0]["predicted_total"] if existing_tb_res.data else None
+
+                if tb_locked:
+                    st.markdown(f"🔒 **Locked** | Your Prediction: `{existing_tb_val if existing_tb_val is not None else 'No Prediction Submitted'}`")
+                else:
+                    tb_input = st.number_input(
+                        "Predicted Combined Final Score",
+                        min_value=0, max_value=150,
+                        value=existing_tb_val if existing_tb_val is not None else 40,
+                        step=1,
+                    )
+                    if st.button("Save Tiebreaker Prediction"):
+                        supabase.table("tiebreakers").upsert({
+                            "user_id": st.session_state.user_id,
+                            "week_number": current_week,
+                            "predicted_total": int(tb_input),
+                            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        }, on_conflict="user_id,week_number").execute()
+                        st.success("Tiebreaker prediction saved!")
+                        st.rerun()
+
     # ------------------------------------------
     # TAB 2: LEADERBOARD (weekly winner + season ranking)
     # ------------------------------------------
@@ -265,8 +426,9 @@ else:
                 season_display = [
                     {
                         "Rank": row["season_rank"],
-                        "Player": row["display_name"],
+                        "Player": f"{row['display_name']} ({row.get('email', '')})",
                         "Total Points": row["total_points"],
+                        "Top 3 Finishes": medals_display(row.get("gold_weeks", 0), row.get("silver_weeks", 0), row.get("bronze_weeks", 0)),
                     }
                     for row in season_res.data
                 ]
@@ -300,12 +462,25 @@ else:
                 supabase.table("picks").select("user_id, matchup_id, selected_team").in_("matchup_id", matchup_ids).execute().data
                 if matchup_ids else []
             )
-            all_profiles = supabase.table("profiles").select("id, display_name").execute().data
+            all_profiles = supabase.table("profiles").select("id, display_name, email").execute().data or []
             name_by_id = {p["id"]: p["display_name"] for p in all_profiles}
+            email_by_id = {p["id"]: p.get("email", "") for p in all_profiles}
+
+            tb_res = supabase.table("tiebreakers").select("user_id, predicted_total").eq("week_number", selected_week).execute().data or []
+            tiebreaker_by_user = {t["user_id"]: t["predicted_total"] for t in tb_res}
 
             picks_by_user = {}
             for pk in week_picks:
                 picks_by_user.setdefault(pk["user_id"], []).append(pk)
+
+            # --- Participation & payout summary ---
+            paid_rows = supabase.table("weekly_payments").select("user_id").eq("week_number", selected_week).eq("paid", True).execute().data or []
+            paid_count = len(paid_rows)
+            payout_total = paid_count * ENTRY_FEE
+            st.caption(
+                f"📋 **{len(picks_by_user)} of {len(all_profiles)}** registered players have submitted picks for Week {selected_week}. "
+                f"💰 Weekly payout pool: **${payout_total:.2f}** ({paid_count} paid entries × ${ENTRY_FEE:.2f})."
+            )
 
             if not picks_by_user:
                 st.info(f"No picks recorded yet for Week {selected_week}.")
@@ -326,7 +501,9 @@ else:
                         elif logo:
                             incorrect_logos.append(logo)
                     player_rows.append({
+                        "user_id": user_id,
                         "display_name": name_by_id.get(user_id, "Unknown Player"),
+                        "email": email_by_id.get(user_id, ""),
                         "correct_logos": correct_logos,
                         "incorrect_logos": incorrect_logos,
                         "points": points,
@@ -340,10 +517,40 @@ else:
                     row["rank"] = current_rank
                     prev_points = row["points"]
 
-                if player_rows:
+                # --- Winner banner: only announce once the whole week is FINAL,
+                # and use the tiebreaker to break any tie at the top. ---
+                total_games = len(week_matchups)
+                final_games = sum(1 for m in week_matchups if m["status"] == "FINAL")
+                week_complete = total_games > 0 and final_games == total_games
+
+                if not week_complete:
+                    st.info(f"📊 Week {selected_week} in progress — {final_games} of {total_games} games final. The winner will be announced once the week concludes.")
+                elif player_rows:
                     top_score = player_rows[0]["points"]
-                    winners = [r["display_name"] for r in player_rows if r["points"] == top_score]
-                    st.success(f"🥇 Week {selected_week} Winner{'s' if len(winners) > 1 else ''}: **{', '.join(winners)}** ({top_score} pts)")
+                    tied_players = [r for r in player_rows if r["points"] == top_score]
+
+                    if len(tied_players) == 1:
+                        st.success(f"🥇 Week {selected_week} Winner: **{tied_players[0]['display_name']}** ({top_score} pts)")
+                    else:
+                        last_game = max(week_matchups, key=lambda g: g["game_time"])
+                        actual_total = None
+                        if last_game["status"] == "FINAL" and last_game.get("home_score") is not None and last_game.get("away_score") is not None:
+                            actual_total = last_game["home_score"] + last_game["away_score"]
+
+                        if actual_total is not None:
+                            def diff_for(r):
+                                pred = tiebreaker_by_user.get(r["user_id"])
+                                return abs(pred - actual_total) if pred is not None else float("inf")
+                            tied_players_sorted = sorted(tied_players, key=diff_for)
+                            best_diff = diff_for(tied_players_sorted[0])
+                            tb_winners = [r["display_name"] for r in tied_players_sorted if diff_for(r) == best_diff]
+                            st.success(
+                                f"🥇 Week {selected_week} Winner (tiebreaker applied): **{', '.join(tb_winners)}** "
+                                f"({top_score} pts, closest to the actual combined score of {actual_total})"
+                            )
+                        else:
+                            names = ", ".join(r["display_name"] for r in tied_players)
+                            st.info(f"🤝 Week {selected_week}: **{names}** tied at {top_score} pts — tiebreaker pending the final score of the last game.")
 
                 def logo_cell(urls):
                     if not urls:
@@ -353,13 +560,17 @@ else:
                 rows_html = ""
                 for row in player_rows:
                     name = html.escape(row["display_name"])
+                    email_esc = html.escape(row["email"] or "")
+                    prediction = tiebreaker_by_user.get(row["user_id"])
+                    prediction_display = str(prediction) if prediction is not None else "—"
                     rows_html += (
                         "<tr style='border-bottom:1px solid #333;'>"
                         f"<td style='padding:8px;'>{row['rank']}</td>"
-                        f"<td style='padding:8px;'>{name}</td>"
+                        f"<td style='padding:8px;'>{name} <span style='color:#888;font-size:0.85em;'>({email_esc})</span></td>"
                         f"<td style='padding:8px;'>{logo_cell(row['correct_logos'])}</td>"
                         f"<td style='padding:8px;'>{logo_cell(row['incorrect_logos'])}</td>"
                         f"<td style='padding:8px;text-align:center;'>{row['points']}</td>"
+                        f"<td style='padding:8px;text-align:center;'>{prediction_display}</td>"
                         "</tr>"
                     )
 
@@ -372,6 +583,7 @@ else:
                 <th style="text-align:left;padding:8px;">Correct</th>
                 <th style="text-align:left;padding:8px;">Incorrect</th>
                 <th style="text-align:center;padding:8px;">Points</th>
+                <th style="text-align:center;padding:8px;">Tiebreaker Pred.</th>
                 </tr>
                 </thead>
                 <tbody>{rows_html}</tbody>
@@ -464,6 +676,7 @@ else:
                     try:
                         supabase.table("picks").delete().eq("user_id", target_id).execute()
                         supabase.table("weekly_payments").delete().eq("user_id", target_id).execute()
+                        supabase.table("tiebreakers").delete().eq("user_id", target_id).execute()
                         supabase.table("profiles").delete().eq("id", target_id).execute()
                         st.success(f"Removed {names_by_id[target_id]} from the pool.")
                         st.rerun()
