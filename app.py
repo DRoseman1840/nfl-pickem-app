@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import urllib.parse
+from zoneinfo import ZoneInfo
 from supabase import create_client, Client
 
 # ==========================================
@@ -192,6 +193,9 @@ else:
                     is_locked = current_time > game_time
 
                     with st.container(border=True):
+                        eastern_time = game_time.astimezone(ZoneInfo("America/New_York"))
+                        st.caption(f"🕒 {eastern_time.strftime('%a %b %d, %I:%M %p')} ET")
+
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             if game.get("away_logo"): st.image(game["away_logo"], width=30)
@@ -276,15 +280,16 @@ else:
         # --- Weekly standings, with a week picker ---
         st.subheader("🗓️ Weekly Results")
         try:
-            weeks_res = supabase.table("matchups").select("week_number").order("week_number", desc=True).execute()
-            week_options = sorted({row["week_number"] for row in weeks_res.data}, reverse=True)
+            weeks_res = supabase.table("matchups").select("week_number").execute()
+            week_options = sorted({row["week_number"] for row in weeks_res.data})
         except Exception:
             week_options = []
 
         if not week_options:
             st.info("No weeks available yet.")
         else:
-            selected_week = st.selectbox("Select Week", week_options, index=0)
+            default_week_index = week_options.index(current_week) if current_week in week_options else 0
+            selected_week = st.selectbox("Select Week", week_options, index=default_week_index)
             weekly_res = (
                 supabase.table("weekly_rankings")
                 .select("*")
