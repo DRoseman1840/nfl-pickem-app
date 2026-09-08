@@ -426,7 +426,7 @@ else:
                 season_display = [
                     {
                         "Rank": row["season_rank"],
-                        "Player": f"{row['display_name']} ({row.get('email', '')})",
+                        "Player": row["display_name"],
                         "Total Points": row["total_points"],
                         "Top 3 Finishes": medals_display(row.get("gold_weeks", 0), row.get("silver_weeks", 0), row.get("bronze_weeks", 0)),
                     }
@@ -560,13 +560,12 @@ else:
                 rows_html = ""
                 for row in player_rows:
                     name = html.escape(row["display_name"])
-                    email_esc = html.escape(row["email"] or "")
                     prediction = tiebreaker_by_user.get(row["user_id"])
                     prediction_display = str(prediction) if prediction is not None else "—"
                     rows_html += (
                         "<tr style='border-bottom:1px solid #333;'>"
                         f"<td style='padding:8px;'>{row['rank']}</td>"
-                        f"<td style='padding:8px;'>{name} <span style='color:#888;font-size:0.85em;'>({email_esc})</span></td>"
+                        f"<td style='padding:8px;'>{name}</td>"
                         f"<td style='padding:8px;'>{logo_cell(row['correct_logos'])}</td>"
                         f"<td style='padding:8px;'>{logo_cell(row['incorrect_logos'])}</td>"
                         f"<td style='padding:8px;text-align:center;'>{row['points']}</td>"
@@ -618,7 +617,7 @@ else:
                 adm_selected_week = st.selectbox("Auditing Week", adm_week_options, index=adm_default_idx, key="adm_week_select")
 
                 try:
-                    users_res = supabase.table("profiles").select("id", "display_name").execute()
+                    users_res = supabase.table("profiles").select("id", "display_name", "email").execute()
                     users_list = users_res.data if users_res.data else []
 
                     payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_selected_week).execute()
@@ -630,11 +629,13 @@ else:
                         for user in users_list:
                             u_id = user["id"]
                             u_name = user["display_name"]
+                            u_email = user.get("email", "")
                             is_user_paid = paid_map.get(u_id, False)
 
                             col_n, col_s = st.columns(2)
                             with col_n:
                                 st.write(f"👤 **{u_name}**")
+                                st.caption(u_email)
                             with col_s:
                                 lbl = "✅ Paid (Click to Lock)" if is_user_paid else "❌ Unpaid (Click to Force Approve)"
                                 if st.button(lbl, key=f"adm_p_{u_id}_{adm_selected_week}"):
@@ -658,17 +659,18 @@ else:
                 "their account credentials, just their participation in the pool."
             )
             try:
-                removable_users = supabase.table("profiles").select("id, display_name").execute().data or []
+                removable_users = supabase.table("profiles").select("id, display_name, email").execute().data or []
             except Exception as e:
                 removable_users = []
                 st.error(f"Couldn't load player list: {e}")
 
             if removable_users:
                 names_by_id = {u["id"]: u["display_name"] for u in removable_users}
+                labels_by_id = {u["id"]: f"{u['display_name']} ({u.get('email', '')})" for u in removable_users}
                 target_id = st.selectbox(
                     "Select a player to remove",
                     options=list(names_by_id.keys()),
-                    format_func=lambda uid: names_by_id[uid],
+                    format_func=lambda uid: labels_by_id[uid],
                     key="remove_player_select",
                 )
                 confirm_remove = st.checkbox(f"I understand this will remove {names_by_id[target_id]} from the pool.")
