@@ -81,6 +81,13 @@ def parse_events(data: dict) -> list[dict]:
             else:
                 winner = "TIE"
 
+        def parse_score(competitor):
+            raw = competitor.get("score")
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return None
+
         records.append({
             "espn_id": event["id"],
             "week_number": week_number,
@@ -89,6 +96,8 @@ def parse_events(data: dict) -> list[dict]:
             "away_team": away["team"]["displayName"],
             "home_logo": home["team"].get("logo"),
             "away_logo": away["team"].get("logo"),
+            "home_score": parse_score(home),
+            "away_score": parse_score(away),
             "status": status,
             "winner": winner,
         })
