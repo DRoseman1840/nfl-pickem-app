@@ -1,16 +1,21 @@
 import streamlit as st
 import datetime
 import urllib.parse
-import requests
 from supabase import create_client, Client
 
 # ==========================================
 # 1. GLOBAL APP CONFIGURATION
 # ==========================================
-SUPABASE_URL = "https://txgwpaaaecbxivzuosmr.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR4Z3dwYWFhZWNieGl2enVvc21yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0NzcwNTcsImV4cCI6MjEwNDA1MzA1N30.ZdQhH7u15ozbEHvIT_xB7FH7rI8h3WkUfvnWnKtlNtE"
+# Credentials now come from Streamlit secrets instead of being hardcoded.
+# Locally: create .streamlit/secrets.toml (already gitignored by default) with:
+#   SUPABASE_URL = "https://txgwpaaaecbxivzuosmr.supabase.co"
+#   SUPABASE_KEY = "your-anon-key"
+#   ADMIN_EMAIL = "drose1840@gmail.com"
+# On Streamlit Community Cloud: set the same keys under App settings > Secrets.
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 VENMO_USERNAME = "Derek-Roseman"  # Do NOT include the "@" symbol here
-ADMIN_EMAIL = "drose1840@gmail.com"  # 👈 REPLACE THIS with your personal email to unlock Admin settings
+ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", "drose1840@gmail.com")
 
 @st.cache_resource
 def get_supabase_client() -> Client:
@@ -29,17 +34,43 @@ if "user_id" not in st.session_state:
 if "display_name" not in st.session_state:
     st.session_state.display_name = ""
 
+
+def get_current_week() -> int:
+    """The current week is the earliest week that still has a non-FINAL game.
+    Once every game in a week is FINAL, we roll forward to the next week.
+    Falls back to the highest known week number if everything is finished."""
+    upcoming = (
+        supabase.table("matchups")
+        .select("week_number")
+        .neq("status", "FINAL")
+        .order("game_time")
+        .limit(1)
+        .execute()
+    )
+    if upcoming.data:
+        return upcoming.data[0]["week_number"]
+
+    latest = (
+        supabase.table("matchups")
+        .select("week_number")
+        .order("week_number", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return latest.data[0]["week_number"] if latest.data else 1
+
+
 # ==========================================
 # 2. SCREEN 1: SECURE AUTHENTICATION
 # ==========================================
 if not st.session_state.authenticated:
     st.title("🏈 NFL Pick'em Pool")
     st.subheader("Sign In or Register")
-    
+
     email = st.text_input("Email Address").strip().lower()
     password = st.text_input("Password", type="password")
     col1, col2 = st.columns(2)
-    
+
     with col1:
         if st.button("Log In", use_container_width=True):
             if email and password:
@@ -47,14 +78,13 @@ if not st.session_state.authenticated:
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     st.session_state.user_id = res.user.id
                     st.session_state.user_email = res.user.email
-                    
-                    # Safely pull profile row out of the list wrapper
+
                     profile = supabase.table("profiles").select("display_name").eq("id", res.user.id).execute()
                     if profile.data and len(profile.data) > 0:
                         st.session_state.display_name = profile.data[0]["display_name"]
                     else:
                         st.session_state.display_name = email.split("@")[0]
-                        
+
                     st.session_state.authenticated = True
                     st.success("Logged in successfully!")
                     st.rerun()
@@ -83,6 +113,7 @@ if not st.session_state.authenticated:
                     st.error(f"Registration error: {str(e)}")
             else:
                 st.warning("All fields are required.")
+
 # ==========================================
 # 3. SCREEN 2: MAIN POOL INTERFACE
 # ==========================================
@@ -90,7 +121,7 @@ else:
     st.sidebar.title("🏈 Match Center")
     st.sidebar.write(f"Logged in as: **{st.session_state.display_name}**")
     st.sidebar.caption(f"Account: {st.session_state.user_email}")
-    
+
     if st.sidebar.button("Log Out", use_container_width=True):
         st.session_state.authenticated = False
         st.session_state.user_id = ""
@@ -99,22 +130,31 @@ else:
     tabs_list = ["📝 Submit Weekly Picks", "🏆 Standings & Leaderboard"]
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         tabs_list.append("⚙️ Admin Panel")
-        
+
     ui_tabs = st.tabs(tabs_list)
 
     # ------------------------------------------
     # TAB 1: USER PICK ENTRY FORM
     # ------------------------------------------
     with ui_tabs[0]:
-        response = supabase.table("matchups").select("*").order("game_time").execute()
+        current_week = get_current_week()
+        response = (
+            supabase.table("matchups")
+            .select("*")
+            .eq("week_number", current_week)
+            .order("game_time")
+            .execute()
+        )
         games = response.data
 
         if not games:
-            st.info("🏈 Awaiting matchups dataset loading. Please use your database SQL editor script tool to populate Week 1 matchups.")
+            st.info(
+                "🏈 No matchups loaded for this week yet. Run `fetch_schedule.py` "
+                "(or wait for the scheduled GitHub Action) to pull the current week's games."
+            )
         else:
-            current_week = games[0]["week_number"] if games else 1
             st.header(f"NFL Week {current_week} Match Selections")
-            
+
             pay_check = supabase.table("weekly_payments").select("paid").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
             has_paid = pay_check.data[0]["paid"] if (pay_check.data and len(pay_check.data) > 0) else False
 
@@ -122,13 +162,14 @@ else:
             if not has_paid:
                 st.warning("⚠️ Weekly Entry Fee Required")
                 st.markdown(f"To unlock your entry sheet for **Week {current_week}**, there is a required **\$5.00 entry fee**.")
-                
+
                 venmo_note = f"Week {current_week} NFL Pickem - {st.session_state.display_name}"
                 encoded_note = urllib.parse.quote(venmo_note)
-                venmo_url = f"https://venmo.com{VENMO_USERNAME}?txn=pay&amount=5.00&note={encoded_note}"
-                
+                # Fixed missing "/" between the domain and username (this was broken before).
+                venmo_url = f"https://venmo.com/{VENMO_USERNAME}?txn=pay&amount=5.00&note={encoded_note}"
+
                 st.markdown(f'<a href="{venmo_url}" target="_blank"><button style="background-color:#008CBA; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; width:100%;">💸 Pay $5.00 on Venmo</button></a>', unsafe_allow_html=True)
-                
+
                 confirm_payment = st.checkbox("I verify I have sent my $5.00 buy-in via Venmo")
                 if confirm_payment:
                     if st.button("Unlock My Pick Sheet"):
@@ -145,11 +186,11 @@ else:
                 saved_picks = {p["matchup_id"]: p["selected_team"] for p in user_picks_res.data}
 
                 current_time = datetime.datetime.now(datetime.timezone.utc)
-                
+
                 for game in games:
                     game_time = datetime.datetime.fromisoformat(game["game_time"].replace("Z", "+00:00"))
                     is_locked = current_time > game_time
-                    
+
                     with st.container(border=True):
                         c1, c2, c3 = st.columns(3)
                         with c1:
@@ -181,7 +222,7 @@ else:
                         else:
                             existing_pick = saved_picks.get(game["id"], None)
                             options_list = ["Select Team", game["away_team"], game["home_team"]]
-                            
+
                             default_idx = 0
                             if existing_pick == game["away_team"]:
                                 default_idx = 1
@@ -205,20 +246,69 @@ else:
                                 }).execute()
                                 st.toast(f"Saved: {choice}!", icon="💾")
 
-
-       # ------------------------------------------
-    # TAB 2: LIVE LEADERBOARD Scoreboard
+    # ------------------------------------------
+    # TAB 2: LEADERBOARD (weekly winner + season ranking)
     # ------------------------------------------
     with ui_tabs[1]:
         st.header("🏆 Pool Standings")
+
+        # --- Season standings ---
+        st.subheader("📅 Season Ranking")
         try:
-            leaderboard_data = supabase.table("leaderboard").select("*").execute()
-            if leaderboard_data.data:
-                st.dataframe(leaderboard_data.data, hide_index=True, use_container_width=True)
+            season_res = supabase.table("season_scores").select("*").order("season_rank").execute()
+            if season_res.data:
+                season_display = [
+                    {
+                        "Rank": row["season_rank"],
+                        "Player": row["display_name"],
+                        "Total Points": row["total_points"],
+                    }
+                    for row in season_res.data
+                ]
+                st.dataframe(season_display, hide_index=True, use_container_width=True)
             else:
-                st.info("Leaderboard scores will compute once the first wave of games finish!")
+                st.info("Season standings will appear once the first games are final.")
+        except Exception as e:
+            st.caption(f"Waiting for match completions to rank players. ({e})")
+
+        st.divider()
+
+        # --- Weekly standings, with a week picker ---
+        st.subheader("🗓️ Weekly Results")
+        try:
+            weeks_res = supabase.table("matchups").select("week_number").order("week_number", desc=True).execute()
+            week_options = sorted({row["week_number"] for row in weeks_res.data}, reverse=True)
         except Exception:
-            st.caption("Waiting for match completions to rank player metrics.")
+            week_options = []
+
+        if not week_options:
+            st.info("No weeks available yet.")
+        else:
+            selected_week = st.selectbox("Select Week", week_options, index=0)
+            weekly_res = (
+                supabase.table("weekly_rankings")
+                .select("*")
+                .eq("week_number", selected_week)
+                .order("week_rank")
+                .execute()
+            )
+            if weekly_res.data:
+                top_score = weekly_res.data[0]["points"]
+                winners = [r["display_name"] for r in weekly_res.data if r["points"] == top_score]
+                st.success(f"🥇 Week {selected_week} Winner{'s' if len(winners) > 1 else ''}: **{', '.join(winners)}** ({top_score} pts)")
+
+                weekly_display = [
+                    {
+                        "Rank": row["week_rank"],
+                        "Player": row["display_name"],
+                        "Points": row["points"],
+                        "Games Final": row["games_final"],
+                    }
+                    for row in weekly_res.data
+                ]
+                st.dataframe(weekly_display, hide_index=True, use_container_width=True)
+            else:
+                st.info(f"No picks recorded yet for Week {selected_week}.")
 
     # ------------------------------------------
     # TAB 3: ADMIN MANAGE PANEL
@@ -227,21 +317,18 @@ else:
         with ui_tabs[2]:
             st.header("⚙️ Admin Payment Audit Panel")
             st.caption("Cross-reference your real Venmo feed. Toggle payment access manually to lock or unlock users instantly.")
-            
-            # Safely query matchups to find current active week number context values
-            games_check = supabase.table("matchups").select("week_number").limit(1).execute()
-            adm_current_week = games_check.data[0]["week_number"] if games_check.data else 1
-            
+
+            adm_current_week = get_current_week()
             st.write(f"Auditing Payment Status for: **Week {adm_current_week}**")
             st.divider()
 
             try:
                 users_res = supabase.table("profiles").select("id", "display_name").execute()
                 users_list = users_res.data if users_res.data else []
-                
+
                 payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_current_week).execute()
                 paid_map = {p["user_id"]: p["paid"] for p in payments_res.data} if payments_res.data else {}
-                
+
                 if not users_list:
                     st.info("No players have registered accounts in your pool yet.")
                 else:
@@ -249,7 +336,7 @@ else:
                         u_id = user["id"]
                         u_name = user["display_name"]
                         is_user_paid = paid_map.get(u_id, False)
-                        
+
                         col_n, col_s = st.columns(2)
                         with col_n:
                             st.write(f"👤 **{u_name}**")
@@ -265,4 +352,3 @@ else:
                                 st.rerun()
             except Exception as admin_err:
                 st.error(f"Admin Interface Error: {str(admin_err)}")
-
