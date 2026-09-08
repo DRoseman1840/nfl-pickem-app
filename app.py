@@ -158,7 +158,10 @@ if not st.session_state.authenticated:
             if new_email and new_password and new_name.strip():
                 try:
                     res = supabase.auth.sign_up({"email": new_email, "password": new_password})
-                    if res.user:
+                    # Supabase returns a fake, non-persisted user object when the email is
+                    # already registered (confirmed or not) to avoid leaking which emails
+                    # exist. A genuine new signup always has a non-empty `identities` list.
+                    if res.user and res.user.identities:
                         supabase.table("profiles").insert({
                             "id": res.user.id,
                             "display_name": new_name.strip(),
@@ -168,6 +171,11 @@ if not st.session_state.authenticated:
                         st.success("🎉 Account Created Successfully!")
                         st.info("📧 **Action Required:** Open your email inbox and click the confirmation link before attempting to log in.")
                         st.markdown("---")
+                    else:
+                        st.warning(
+                            "An account with this email already exists. Try logging in, or use "
+                            "the 'Forgot Password' tab if you don't remember your password."
+                        )
                 except Exception as e:
                     st.error(f"Registration error: {str(e)}")
             else:
