@@ -478,9 +478,9 @@ else:
             paid_count = len(paid_rows)
             payout_total = paid_count * ENTRY_FEE
             st.caption(
-                f"📋 **{len(picks_by_user)} of {len(all_profiles)}** registered players have submitted picks for Week {selected_week}. "
-                f"💰 Weekly payout pool: **${payout_total:.2f}** ({paid_count} paid entries × ${ENTRY_FEE:.2f})."
+                f"📋 **{len(picks_by_user)} of {len(all_profiles)}** registered players have submitted picks for Week {selected_week}."
             )
+            st.markdown(f"<span style='color:#ffffff;'>Weekly payout pool: ${payout_total:.2f}</span>", unsafe_allow_html=True)
 
             if not picks_by_user:
                 st.info(f"No picks recorded yet for Week {selected_week}.")
