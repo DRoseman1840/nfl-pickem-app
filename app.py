@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import urllib.parse
+import html
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
 
@@ -290,70 +291,181 @@ else:
         else:
             default_week_index = week_options.index(current_week) if current_week in week_options else 0
             selected_week = st.selectbox("Select Week", week_options, index=default_week_index)
-            weekly_res = (
-                supabase.table("weekly_rankings")
-                .select("*")
-                .eq("week_number", selected_week)
-                .order("week_rank")
-                .execute()
-            )
-            if weekly_res.data:
-                top_score = weekly_res.data[0]["points"]
-                winners = [r["display_name"] for r in weekly_res.data if r["points"] == top_score]
-                st.success(f"🥇 Week {selected_week} Winner{'s' if len(winners) > 1 else ''}: **{', '.join(winners)}** ({top_score} pts)")
 
-                weekly_display = [
-                    {
-                        "Rank": row["week_rank"],
-                        "Player": row["display_name"],
-                        "Points": row["points"],
-                        "Games Final": row["games_final"],
-                    }
-                    for row in weekly_res.data
-                ]
-                st.dataframe(weekly_display, hide_index=True, use_container_width=True)
-            else:
+            week_matchups = supabase.table("matchups").select("*").eq("week_number", selected_week).execute().data
+            matchup_by_id = {m["id"]: m for m in week_matchups}
+            matchup_ids = list(matchup_by_id.keys())
+
+            week_picks = (
+                supabase.table("picks").select("user_id, matchup_id, selected_team").in_("matchup_id", matchup_ids).execute().data
+                if matchup_ids else []
+            )
+            all_profiles = supabase.table("profiles").select("id, display_name").execute().data
+            name_by_id = {p["id"]: p["display_name"] for p in all_profiles}
+
+            picks_by_user = {}
+            for pk in week_picks:
+                picks_by_user.setdefault(pk["user_id"], []).append(pk)
+
+            if not picks_by_user:
                 st.info(f"No picks recorded yet for Week {selected_week}.")
+            else:
+                player_rows = []
+                for user_id, user_picks in picks_by_user.items():
+                    correct_logos, incorrect_logos, points = [], [], 0
+                    for pk in user_picks:
+                        m = matchup_by_id.get(pk["matchup_id"])
+                        if not m or m["status"] != "FINAL" or not m.get("winner") or m["winner"] == "TIE":
+                            continue  # only completed, decisive games count toward correct/incorrect
+                        win_team = m["home_team"] if m["winner"] == "HOME" else m["away_team"]
+                        pick_team = pk["selected_team"]
+                        logo = m.get("home_logo") if pick_team == m["home_team"] else m.get("away_logo") if pick_team == m["away_team"] else None
+                        if pick_team == win_team:
+                            points += 1
+                            if logo: correct_logos.append(logo)
+                        elif logo:
+                            incorrect_logos.append(logo)
+                    player_rows.append({
+                        "display_name": name_by_id.get(user_id, "Unknown Player"),
+                        "correct_logos": correct_logos,
+                        "incorrect_logos": incorrect_logos,
+                        "points": points,
+                    })
+
+                player_rows.sort(key=lambda r: r["points"], reverse=True)
+                prev_points, current_rank = None, 0
+                for i, row in enumerate(player_rows, start=1):
+                    if row["points"] != prev_points:
+                        current_rank = i
+                    row["rank"] = current_rank
+                    prev_points = row["points"]
+
+                if player_rows:
+                    top_score = player_rows[0]["points"]
+                    winners = [r["display_name"] for r in player_rows if r["points"] == top_score]
+                    st.success(f"🥇 Week {selected_week} Winner{'s' if len(winners) > 1 else ''}: **{', '.join(winners)}** ({top_score} pts)")
+
+                def logo_cell(urls):
+                    if not urls:
+                        return "—"
+                    return "".join(f'<img src="{u}" style="height:22px;margin-right:4px;vertical-align:middle;" />' for u in urls)
+
+                rows_html = ""
+                for row in player_rows:
+                    name = html.escape(row["display_name"])
+                    rows_html += (
+                        "<tr style='border-bottom:1px solid #333;'>"
+                        f"<td style='padding:8px;'>{row['rank']}</td>"
+                        f"<td style='padding:8px;'>{name}</td>"
+                        f"<td style='padding:8px;'>{logo_cell(row['correct_logos'])}</td>"
+                        f"<td style='padding:8px;'>{logo_cell(row['incorrect_logos'])}</td>"
+                        f"<td style='padding:8px;text-align:center;'>{row['points']}</td>"
+                        "</tr>"
+                    )
+
+                table_html = f"""
+                <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                <tr style="border-bottom:2px solid #666;">
+                <th style="text-align:left;padding:8px;">Rank</th>
+                <th style="text-align:left;padding:8px;">Player</th>
+                <th style="text-align:left;padding:8px;">Correct</th>
+                <th style="text-align:left;padding:8px;">Incorrect</th>
+                <th style="text-align:center;padding:8px;">Points</th>
+                </tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+                </table>
+                """
+                st.markdown(table_html, unsafe_allow_html=True)
+                st.caption("Correct/Incorrect logos only appear once a game goes FINAL — picks for upcoming games aren't scored yet.")
 
     # ------------------------------------------
     # TAB 3: ADMIN MANAGE PANEL
     # ------------------------------------------
     if st.session_state.user_email.strip().lower() == ADMIN_EMAIL.strip().lower():
         with ui_tabs[2]:
-            st.header("⚙️ Admin Payment Audit Panel")
+            st.header("⚙️ Admin Panel")
+
+            # --- Payment audit, by week ---
+            st.subheader("💸 Payment Audit")
             st.caption("Cross-reference your real Venmo feed. Toggle payment access manually to lock or unlock users instantly.")
 
+            try:
+                adm_weeks_res = supabase.table("matchups").select("week_number").execute()
+                adm_week_options = sorted({row["week_number"] for row in adm_weeks_res.data})
+            except Exception:
+                adm_week_options = []
+
             adm_current_week = get_current_week()
-            st.write(f"Auditing Payment Status for: **Week {adm_current_week}**")
+
+            if not adm_week_options:
+                st.info("No weeks loaded yet.")
+            else:
+                adm_default_idx = adm_week_options.index(adm_current_week) if adm_current_week in adm_week_options else 0
+                adm_selected_week = st.selectbox("Auditing Week", adm_week_options, index=adm_default_idx, key="adm_week_select")
+
+                try:
+                    users_res = supabase.table("profiles").select("id", "display_name").execute()
+                    users_list = users_res.data if users_res.data else []
+
+                    payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_selected_week).execute()
+                    paid_map = {p["user_id"]: p["paid"] for p in payments_res.data} if payments_res.data else {}
+
+                    if not users_list:
+                        st.info("No players have registered accounts in your pool yet.")
+                    else:
+                        for user in users_list:
+                            u_id = user["id"]
+                            u_name = user["display_name"]
+                            is_user_paid = paid_map.get(u_id, False)
+
+                            col_n, col_s = st.columns(2)
+                            with col_n:
+                                st.write(f"👤 **{u_name}**")
+                            with col_s:
+                                lbl = "✅ Paid (Click to Lock)" if is_user_paid else "❌ Unpaid (Click to Force Approve)"
+                                if st.button(lbl, key=f"adm_p_{u_id}_{adm_selected_week}"):
+                                    supabase.table("weekly_payments").upsert({
+                                        "user_id": u_id,
+                                        "week_number": adm_selected_week,
+                                        "paid": not is_user_paid
+                                    }, on_conflict="user_id,week_number").execute()
+                                    st.success(f"Updated status for {u_name}!")
+                                    st.rerun()
+                except Exception as admin_err:
+                    st.error(f"Admin Interface Error: {str(admin_err)}")
+
             st.divider()
 
+            # --- Remove a player from the pool ---
+            st.subheader("🗑️ Remove a Player")
+            st.caption(
+                "This removes the player's profile from the pool — they'll disappear from the leaderboard, "
+                "payment audit, and picks list. Their login still exists in Supabase Auth; this doesn't delete "
+                "their account credentials, just their participation in the pool."
+            )
             try:
-                users_res = supabase.table("profiles").select("id", "display_name").execute()
-                users_list = users_res.data if users_res.data else []
+                removable_users = supabase.table("profiles").select("id, display_name").execute().data or []
+            except Exception as e:
+                removable_users = []
+                st.error(f"Couldn't load player list: {e}")
 
-                payments_res = supabase.table("weekly_payments").select("user_id", "paid").eq("week_number", adm_current_week).execute()
-                paid_map = {p["user_id"]: p["paid"] for p in payments_res.data} if payments_res.data else {}
-
-                if not users_list:
-                    st.info("No players have registered accounts in your pool yet.")
-                else:
-                    for user in users_list:
-                        u_id = user["id"]
-                        u_name = user["display_name"]
-                        is_user_paid = paid_map.get(u_id, False)
-
-                        col_n, col_s = st.columns(2)
-                        with col_n:
-                            st.write(f"👤 **{u_name}**")
-                        with col_s:
-                            lbl = "✅ Paid (Click to Lock)" if is_user_paid else "❌ Unpaid (Click to Force Approve)"
-                            if st.button(lbl, key=f"adm_p_{u_id}"):
-                                supabase.table("weekly_payments").upsert({
-                                    "user_id": u_id,
-                                    "week_number": adm_current_week,
-                                    "paid": not is_user_paid
-                                }, on_conflict="user_id,week_number").execute()
-                                st.success(f"Updated status for {u_name}!")
-                                st.rerun()
-            except Exception as admin_err:
-                st.error(f"Admin Interface Error: {str(admin_err)}")
+            if removable_users:
+                names_by_id = {u["id"]: u["display_name"] for u in removable_users}
+                target_id = st.selectbox(
+                    "Select a player to remove",
+                    options=list(names_by_id.keys()),
+                    format_func=lambda uid: names_by_id[uid],
+                    key="remove_player_select",
+                )
+                confirm_remove = st.checkbox(f"I understand this will remove {names_by_id[target_id]} from the pool.")
+                if st.button("Remove Player", type="primary", disabled=not confirm_remove):
+                    try:
+                        supabase.table("picks").delete().eq("user_id", target_id).execute()
+                        supabase.table("weekly_payments").delete().eq("user_id", target_id).execute()
+                        supabase.table("profiles").delete().eq("id", target_id).execute()
+                        st.success(f"Removed {names_by_id[target_id]} from the pool.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Couldn't remove player: {e}")
