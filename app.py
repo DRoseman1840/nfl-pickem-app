@@ -474,9 +474,7 @@ else:
                 picks_by_user.setdefault(pk["user_id"], []).append(pk)
 
             # --- Participation & payout summary ---
-            paid_rows = supabase.table("weekly_payments").select("user_id").eq("week_number", selected_week).eq("paid", True).execute().data or []
-            paid_count = len(paid_rows)
-            payout_total = paid_count * ENTRY_FEE
+            payout_total = len(picks_by_user) * ENTRY_FEE
             st.caption(
                 f"📋 **{len(picks_by_user)} of {len(all_profiles)}** registered players have submitted picks for Week {selected_week}."
             )
