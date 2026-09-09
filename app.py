@@ -1,10 +1,10 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import datetime
 import urllib.parse
 import html
 from zoneinfo import ZoneInfo
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 
 # ==========================================
 # 1. GLOBAL APP CONFIGURATION
@@ -30,7 +30,9 @@ ENTRY_FEE = 5.00
 # st.session_state is isolated per browser session, so this keeps each
 # person's authenticated client private to them.
 if "supabase" not in st.session_state:
-    st.session_state.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    st.session_state.supabase = create_client(
+        SUPABASE_URL, SUPABASE_KEY, options=ClientOptions(flow_type="pkce")
+    )
 supabase: Client = st.session_state.supabase
 
 st.set_page_config(page_title="NFL Pick'em Pool", page_icon="🏈", layout="centered")
@@ -84,33 +86,12 @@ def medals_display(gold: int, silver: int, bronze: int) -> str:
 # ==========================================
 # 2. PASSWORD RESET LANDING (from the emailed link)
 # ==========================================
-# Supabase's recovery link puts its data after a "#" (e.g. #access_token=...
-# or #error=...). Browsers never send anything after "#" to the server, so
-# Streamlit's Python code can't see it directly. This tiny script runs in the
-# browser, moves that data into the normal "?" part of the URL, and reloads
-# — after which st.query_params can actually read it.
-components.html("""
-<script>
-  const hash = window.parent.location.hash;
-  if (hash && hash.length > 1) {
-    const hashParams = new URLSearchParams(hash.substring(1));
-    const url = new URL(window.parent.location.href);
-    let changed = false;
-    for (const [key, value] of hashParams.entries()) {
-      url.searchParams.set(key, value);
-      changed = true;
-    }
-    if (changed) {
-      url.hash = '';
-      window.parent.location.replace(url.toString());
-    }
-  }
-</script>
-""", height=0)
-
+# With PKCE flow enabled on the client, Supabase's recovery link lands here
+# as a normal "?code=..." query param (or "?error=..." if it's expired/used),
+# both of which Streamlit can read directly via st.query_params.
 query_params = st.query_params
 
-if ("code" in query_params or "access_token" in query_params or "error" in query_params) and not st.session_state.authenticated:
+if ("code" in query_params or "error" in query_params) and not st.session_state.authenticated:
     st.title("🔑 Reset Your Password")
 
     if "error" in query_params:
@@ -121,10 +102,7 @@ if ("code" in query_params or "access_token" in query_params or "error" in query
 
     if "recovery_session_set" not in st.session_state:
         try:
-            if "code" in query_params:
-                supabase.auth.exchange_code_for_session({"auth_code": query_params["code"]})
-            elif "access_token" in query_params and "refresh_token" in query_params:
-                supabase.auth.set_session(query_params["access_token"], query_params["refresh_token"])
+            supabase.auth.exchange_code_for_session({"auth_code": query_params["code"]})
             st.session_state.recovery_session_set = True
         except Exception as e:
             st.error(f"This reset link is invalid or has expired. ({e})")
