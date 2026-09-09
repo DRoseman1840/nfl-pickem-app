@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import datetime
 import urllib.parse
 import html
@@ -83,20 +84,50 @@ def medals_display(gold: int, silver: int, bronze: int) -> str:
 # ==========================================
 # 2. PASSWORD RESET LANDING (from the emailed link)
 # ==========================================
+# Supabase's recovery link puts its data after a "#" (e.g. #access_token=...
+# or #error=...). Browsers never send anything after "#" to the server, so
+# Streamlit's Python code can't see it directly. This tiny script runs in the
+# browser, moves that data into the normal "?" part of the URL, and reloads
+# — after which st.query_params can actually read it.
+components.html("""
+<script>
+  const hash = window.parent.location.hash;
+  if (hash && hash.length > 1) {
+    const hashParams = new URLSearchParams(hash.substring(1));
+    const url = new URL(window.parent.location.href);
+    let changed = false;
+    for (const [key, value] of hashParams.entries()) {
+      url.searchParams.set(key, value);
+      changed = true;
+    }
+    if (changed) {
+      url.hash = '';
+      window.parent.location.replace(url.toString());
+    }
+  }
+</script>
+""", height=0)
+
 query_params = st.query_params
-if "code" in query_params and not st.session_state.authenticated:
+
+if ("code" in query_params or "access_token" in query_params or "error" in query_params) and not st.session_state.authenticated:
     st.title("🔑 Reset Your Password")
-    code = query_params["code"]
+
+    if "error" in query_params:
+        err_desc = query_params.get("error_description", "This link is invalid or has expired.").replace("+", " ")
+        st.error(f"⚠️ {err_desc}")
+        st.info("Please go back and request a new password reset link from the 'Forgot Password' tab — links expire after a set time and can only be used once.")
+        st.stop()
 
     if "recovery_session_set" not in st.session_state:
         try:
-            supabase.auth.exchange_code_for_session({"auth_code": code})
+            if "code" in query_params:
+                supabase.auth.exchange_code_for_session({"auth_code": query_params["code"]})
+            elif "access_token" in query_params and "refresh_token" in query_params:
+                supabase.auth.set_session(query_params["access_token"], query_params["refresh_token"])
             st.session_state.recovery_session_set = True
         except Exception as e:
-            st.error(
-                "This reset link is invalid or has expired. Please request a new one from the "
-                f"'Forgot Password' tab on the login page. ({e})"
-            )
+            st.error(f"This reset link is invalid or has expired. ({e})")
 
     if st.session_state.get("recovery_session_set"):
         new_pw = st.text_input("New Password", type="password", key="recovery_new_pw")
