@@ -3,8 +3,7 @@ import datetime
 import urllib.parse
 import html
 from zoneinfo import ZoneInfo
-from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
+from supabase import create_client, Client, ClientOptions
 
 # ==========================================
 # 1. GLOBAL APP CONFIGURATION
