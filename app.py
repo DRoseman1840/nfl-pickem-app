@@ -412,10 +412,18 @@ else:
                 last_game_time = datetime.datetime.fromisoformat(last_game["game_time"].replace("Z", "+00:00"))
                 tb_locked = current_time > last_game_time
 
-                st.caption(
-                    f"Predict the **combined final score** (both teams added together) of the last game of the "
-                    f"week: {last_game['away_team']} @ {last_game['home_team']}. Used to break ties for the weekly win."
-                )
+                st.caption("Predict the **combined final score** (both teams added together) of the last game of the week. Used to break ties for the weekly win.")
+
+                with st.container(border=True):
+                    tb_c1, tb_c2, tb_c3 = st.columns([2, 1, 2])
+                    with tb_c1:
+                        if last_game.get("away_logo"): st.image(last_game["away_logo"], width=50)
+                        st.markdown(f"<p style='text-align:center;font-size:1.1em;font-weight:bold;margin-top:4px;'>{last_game['away_team']}</p>", unsafe_allow_html=True)
+                    with tb_c2:
+                        st.markdown("<p style='text-align:center;font-size:1.4em;font-weight:bold;margin-top:20px;'>@</p>", unsafe_allow_html=True)
+                    with tb_c3:
+                        if last_game.get("home_logo"): st.image(last_game["home_logo"], width=50)
+                        st.markdown(f"<p style='text-align:center;font-size:1.1em;font-weight:bold;margin-top:4px;'>{last_game['home_team']}</p>", unsafe_allow_html=True)
 
                 existing_tb_res = supabase.table("tiebreakers").select("predicted_total").eq("user_id", st.session_state.user_id).eq("week_number", current_week).execute()
                 existing_tb_val = existing_tb_res.data[0]["predicted_total"] if existing_tb_res.data else None
