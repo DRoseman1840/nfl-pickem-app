@@ -175,10 +175,21 @@ if not st.session_state.authenticated:
                             "display_name": new_name.strip(),
                             "email": new_email,
                         }).execute()
-                        st.markdown("---")
-                        st.success("🎉 Account Created Successfully!")
-                        st.info("📧 **Action Required:** Open your email inbox and click the confirmation link before attempting to log in.")
-                        st.markdown("---")
+
+                        if res.session:
+                            # Email confirmation is disabled, so Supabase already
+                            # returned a live session — skip straight into the app.
+                            st.session_state.user_id = res.user.id
+                            st.session_state.user_email = res.user.email
+                            st.session_state.display_name = new_name.strip()
+                            st.session_state.authenticated = True
+                            st.success("🎉 Account created! Logging you in...")
+                            st.rerun()
+                        else:
+                            st.markdown("---")
+                            st.success("🎉 Account Created Successfully!")
+                            st.info("📧 **Action Required:** Open your email inbox and click the confirmation link before attempting to log in.")
+                            st.markdown("---")
                     else:
                         st.warning(
                             "An account with this email already exists. Try logging in, or use "
