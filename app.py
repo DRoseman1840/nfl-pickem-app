@@ -343,10 +343,14 @@ else:
                         eastern_time = game_time.astimezone(ZoneInfo("America/New_York"))
                         st.caption(f"🕒 {eastern_time.strftime('%a %b %d, %I:%M %p')} ET")
 
+                        has_score = game.get("home_score") is not None and game.get("away_score") is not None
+
                         c1, c2, c3 = st.columns(3)
                         with c1:
                             if game.get("away_logo"): st.image(game["away_logo"], width=30)
                             st.write(f"**{game['away_team']}**")
+                            if has_score:
+                                st.markdown(f"<p style='text-align:center;font-size:1.3em;font-weight:bold;'>{game['away_score']}</p>", unsafe_allow_html=True)
                         with c2:
                             if game["status"] == "LIVE":
                                 st.markdown("<p style='text-align:center;color:red;font-weight:bold;'>🔴 LIVE</p>", unsafe_allow_html=True)
@@ -357,6 +361,8 @@ else:
                         with c3:
                             if game.get("home_logo"): st.image(game["home_logo"], width=30)
                             st.write(f"**{game['home_team']}**")
+                            if has_score:
+                                st.markdown(f"<p style='text-align:center;font-size:1.3em;font-weight:bold;'>{game['home_score']}</p>", unsafe_allow_html=True)
 
                         if is_locked:
                             existing_pick = saved_picks.get(game["id"], "No Selection")
